@@ -2,7 +2,8 @@
 //  AuxApp.swift
 //  Aux
 //
-//  Created by hanry li on 6/26/26.
+//  Aux — a real-time, room-based social music game. Milestone 1: the rotating
+//  DJ booth in a single seeded room.
 //
 
 import SwiftUI
@@ -11,7 +12,7 @@ import SwiftUI
 struct AuxApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }
