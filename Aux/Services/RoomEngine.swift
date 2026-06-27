@@ -97,4 +97,22 @@ struct AdvanceParams: Encodable {
     let p_room_id: String
     let p_expected_round_id: String?
     let p_present: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case p_room_id, p_expected_round_id, p_present
+    }
+
+    // The default synthesized encoder OMITS a nil optional, which makes PostgREST
+    // look for a 2-arg overload of advance_room (which doesn't exist). We must
+    // always send `p_expected_round_id`, as JSON null on the bootstrap round.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(p_room_id, forKey: .p_room_id)
+        if let round = p_expected_round_id {
+            try c.encode(round, forKey: .p_expected_round_id)
+        } else {
+            try c.encodeNil(forKey: .p_expected_round_id)
+        }
+        try c.encode(p_present, forKey: .p_present)
+    }
 }
