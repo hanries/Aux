@@ -21,25 +21,23 @@ struct NowPlayingView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
     }
 
-    @ViewBuilder
     private var artwork: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18)
-                .fill(.black.opacity(0.25))
-            if let url = vm.onDeckTrack?.artworkURLLarge {
-                AsyncImage(url: url) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    ProgressView()
+        RoundedRectangle(cornerRadius: 18)
+            .fill(.black.opacity(0.25))
+            .aspectRatio(1, contentMode: .fit)   // square; album art is square
+            .overlay {
+                if let url = vm.onDeckTrack?.artworkURLLarge {
+                    AsyncImage(url: url) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        ProgressView()
+                    }
+                } else {
+                    Text(vm.onDeckTrack == nil ? "⏳" : "🎵")
+                        .font(.system(size: 64))
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-            } else {
-                Text(vm.onDeckTrack == nil ? "⏳" : "🎵")
-                    .font(.system(size: 64))
             }
-        }
-        .frame(height: 220)
-        .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 18))   // clip overflow to the box
     }
 
     private var trackInfo: some View {
