@@ -43,4 +43,16 @@ struct AuthService {
     func upsertProfile(_ profile: UserProfileUpsert) async throws {
         try await supabase.from("users").upsert(profile).execute()
     }
+
+    /// Durable identity lookup for a set of user ids (booth, voters, chat senders),
+    /// independent of who is currently present.
+    func fetchProfiles(ids: [String]) async throws -> [UserProfile] {
+        guard !ids.isEmpty else { return [] }
+        return try await supabase
+            .from("users")
+            .select()
+            .in("id", values: ids)
+            .execute()
+            .value
+    }
 }

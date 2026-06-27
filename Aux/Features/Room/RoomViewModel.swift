@@ -36,10 +36,15 @@ final class RoomViewModel {
     private let roomID = RoomConfig.roomID
     private let channel: RoomChannel
     private let engine: RoomEngine
+    private let auth = AuthService()
     private let roomService = RoomService()
     private let lineupService = LineupService()
     private let voteService = VoteService()
     private let chatService = ChatService()
+
+    /// Durable identity (handle/avatar) resolved from the `users` table, so names
+    /// render even for people who aren't in *our* presence snapshot right now.
+    private(set) var profileCache: [String: UserProfile] = [:]
 
     // Observable state
     var loadState: LoadState = .loading
@@ -134,8 +139,9 @@ final class RoomViewModel {
     }
 
     func displayMember(_ userID: String) -> (handle: String, avatar: String) {
-        if let m = audience.first(where: { $0.userId == userID }) { return (m.handle, m.avatar) }
         if userID == profile.id { return (profile.handle, profile.avatar) }
+        if let cached = profileCache[userID] { return (cached.handle, cached.avatar) }
+        if let m = audience.first(where: { $0.userId == userID }) { return (m.handle, m.avatar) }
         return ("someone", "🎧")
     }
 
@@ -233,14 +239,20 @@ final class RoomViewModel {
             Task { await refreshVotes(); await refreshDJRating() }
         case .messageInserted(let message):
             if !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
+            Task { await ensureProfiles([message.userId]) }
         case .presenceChanged:
-            break  // audience is observed directly from the channel
+            // Present members carry their own identity — seed the cache from them.
+            for member in channel.members where profileCache[member.userId] == nil {
+                profileCache[member.userId] = UserProfile(
+                    id: member.userId, handle: member.handle, avatar: member.avatar)
+            }
         }
     }
 
     private func apply(room: Room) {
         self.room = room
         playback.update(room: room)
+        if let dj = room.currentDjId { Task { await ensureProfiles([dj]) } }
         if room.roundId != currentRoundID {
             currentRoundID = room.roundId
             votes = []
@@ -252,15 +264,28 @@ final class RoomViewModel {
 
     private func refreshLineup() async {
         if let updated = try? await lineupService.fetchLineup(roomID: roomID) { lineup = updated }
+        await ensureProfiles(lineup.map(\.userId))
     }
 
     private func refreshVotes() async {
         guard let round = room?.roundId else { votes = []; return }
         if let updated = try? await voteService.fetchVotes(roundID: round) { votes = updated }
+        await ensureProfiles(votes.map(\.voterId))
     }
 
     private func refreshMessages() async {
         if let recent = try? await chatService.fetchRecent(roomID: roomID) { messages = recent }
+        await ensureProfiles(messages.map(\.userId))
+    }
+
+    /// Fetch any not-yet-cached identities from the `users` table.
+    private func ensureProfiles(_ ids: [String]) async {
+        let missing = Set(ids).subtracting(profileCache.keys).subtracting([profile.id])
+            .filter { !$0.isEmpty }
+        guard !missing.isEmpty else { return }
+        if let fetched = try? await auth.fetchProfiles(ids: Array(missing)) {
+            for profile in fetched { profileCache[profile.id] = profile }
+        }
     }
 
     private func refreshDJRating() async {
