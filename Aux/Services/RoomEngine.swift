@@ -2,11 +2,12 @@
 //  RoomEngine.swift
 //  Aux
 //
-//  Drives the rotation. The host (earliest joiner present) calls `advance_room`
-//  when the current clip's voting/reveal window closes, when a picking DJ's timer
-//  runs out, or to bootstrap a stale/empty room. Non-hosts run the same checks on
-//  a delay as a self-healing failsafe — the RPC is idempotent (compare-and-swap on
-//  round_id), so redundant calls are harmless no-ops.
+//  Drives the rotation + the lobby heartbeat for one room. The leader (the on-deck
+//  DJ's client, or the longest-present member for auto-DJ rounds / if the DJ left)
+//  calls `advance_room` when the clip+reveal window closes, when a picking timer
+//  runs out, or to bootstrap a stale room, and writes the audience heartbeat.
+//  Non-leaders run the same advance checks on a delay as a self-healing failsafe —
+//  the RPC is idempotent (compare-and-swap on round_id), so redundant calls no-op.
 //
 
 import Foundation
@@ -22,11 +23,14 @@ final class RoomEngine {
 
     /// Wired by RoomViewModel so the engine always reads live state.
     var currentRoom: () -> Room? = { nil }
-    var isHost: () -> Bool = { false }
+    var isLeader: () -> Bool = { false }
     var presentIDs: () -> [String] = { [] }
 
-    /// Extra grace before a non-host steps in if the host stalls.
+    /// Extra grace before a non-leader steps in if the leader stalls.
     private let failsafeGrace: TimeInterval = 3
+
+    private var lastHeartbeatAt: ServerTime?
+    private var lastHeartbeatCount = -1
 
     init(roomID: String) {
         self.roomID = roomID
@@ -38,6 +42,7 @@ final class RoomEngine {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.tickIfDue()
+                await self?.tickHeartbeat()
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -46,6 +51,8 @@ final class RoomEngine {
     func stop() {
         task?.cancel()
         task = nil
+        lastHeartbeatAt = nil
+        lastHeartbeatCount = -1
     }
 
     private func tickIfDue() async {
@@ -56,7 +63,7 @@ final class RoomEngine {
         let elapsed = due.seconds(until: clock.now)
         guard elapsed >= 0 else { return }
 
-        let grace = isHost() ? 0 : failsafeGrace
+        let grace = isLeader() ? 0 : failsafeGrace
         guard elapsed >= grace else { return }
 
         inFlight = true
@@ -69,6 +76,25 @@ final class RoomEngine {
             )).execute()
         } catch {
             // Swallow; next tick retries. CAS keeps this safe.
+        }
+    }
+
+    /// The leader keeps the room's lobby heartbeat fresh — on count change and at
+    /// least every `heartbeatInterval`, so the lobby shows accurate "X listening".
+    private func tickHeartbeat() async {
+        guard let clock, isLeader() else { return }
+        let count = presentIDs().count
+        let stale = lastHeartbeatAt.map {
+            $0.seconds(until: clock.now) >= RoomConfig.heartbeatInterval
+        } ?? true
+        guard count != lastHeartbeatCount || stale else { return }
+        do {
+            try await supabase.rpc("room_heartbeat", params: HeartbeatParams(
+                p_room_id: roomID, p_count: count)).execute()
+            lastHeartbeatCount = count
+            lastHeartbeatAt = clock.now
+        } catch {
+            // Best-effort; retried next tick.
         }
     }
 
@@ -115,4 +141,9 @@ struct AdvanceParams: Encodable {
         }
         try c.encode(p_present, forKey: .p_present)
     }
+}
+
+struct HeartbeatParams: Encodable {
+    let p_room_id: String
+    let p_count: Int
 }

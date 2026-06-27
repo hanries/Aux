@@ -11,34 +11,44 @@ import SwiftUI
 
 struct RoomView: View {
     let profile: UserProfile
+    let room: Room
 
     @State private var vm: RoomViewModel
     @State private var showSearch = false
     @State private var showChat = false
+    @Environment(\.scenePhase) private var scenePhase
 
-    init(profile: UserProfile) {
+    init(profile: UserProfile, room: Room) {
         self.profile = profile
-        _vm = State(initialValue: RoomViewModel(profile: profile))
+        self.room = room
+        _vm = State(initialValue: RoomViewModel(
+            profile: profile, roomID: room.id, initialRoom: room))
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                NightBackground()
-                switch vm.loadState {
-                case .loading:
-                    LoadingView(label: "Joining 2am Lo-Fi…")
-                case .failed(let message):
-                    ErrorView(message: message) { Task { await vm.start() } }
-                case .ready:
-                    stage
-                }
+        ZStack {
+            NightBackground()
+            switch vm.loadState {
+            case .loading:
+                LoadingView(label: "Joining \(room.name)…")
+            case .failed(let message):
+                ErrorView(message: message) { Task { await vm.start() } }
+            case .ready:
+                stage
             }
-            .navigationTitle("2am Lo-Fi")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
         }
+        .navigationTitle(room.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbarContent }
         .task { await vm.start() }
+        .onDisappear { Task { await vm.stop() } }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: Task { await vm.enterBackground() }
+            case .active: Task { await vm.enterForeground() }
+            default: break
+            }
+        }
         .sheet(isPresented: $showSearch) {
             SearchView(vm: vm)
         }

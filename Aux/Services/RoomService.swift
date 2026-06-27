@@ -27,4 +27,14 @@ struct RoomService {
         guard let room = rows.first else { throw RoomError.notFound }
         return room
     }
+
+    /// All seeded rooms, for the lobby.
+    func fetchAllRooms() async throws -> [Room] {
+        try await supabase
+            .from("rooms")
+            .select()
+            .order("name", ascending: true)
+            .execute()
+            .value
+    }
 }

@@ -14,17 +14,20 @@ struct DJBoothView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("The Booth")
-                .font(.headline)
+            HStack {
+                Text("The Booth").font(.headline)
+                Spacer()
+                roleBadge
+            }
 
             onDeckRow
 
             if !vm.waitingLineup.isEmpty {
-                Text("Next up")
+                Text("Up next")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                ForEach(vm.waitingLineup) { entry in
-                    lineupRow(entry)
+                ForEach(Array(vm.waitingLineup.enumerated()), id: \.element.id) { index, entry in
+                    lineupRow(entry, position: index + 1)
                 }
             }
 
@@ -34,23 +37,47 @@ struct DJBoothView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
+    private var roleBadge: some View {
+        let (text, color): (String, Color) = switch vm.myRole {
+        case .onDeck: ("you're on deck", .pink)
+        case .inLine: (vm.myLinePosition.map { "you're #\($0)" } ?? "in line", .accentColor)
+        case .audience: ("audience", .secondary)
+        }
+        return Text(text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(color.opacity(0.22), in: Capsule())
+            .foregroundStyle(color)
+    }
+
     private var onDeckRow: some View {
         HStack(spacing: 10) {
             AvatarView(emoji: vm.onDeckAvatar, size: 40, ring: .accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text(vm.onDeckName).font(.subheadline.weight(.semibold))
-                Text("spinning now").font(.caption).foregroundStyle(.secondary)
+                if let next = vm.upNextName {
+                    Text("spinning now · up next: \(next)").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("spinning now").font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Text("▶︎").foregroundStyle(.tint)
         }
     }
 
-    private func lineupRow(_ entry: LineupEntry) -> some View {
+    private func lineupRow(_ entry: LineupEntry, position: Int) -> some View {
         let info = vm.displayMember(entry.userId)
+        let isMe = entry.userId == vm.profile.id
         return HStack(spacing: 10) {
+            Text("\(position)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
             AvatarView(emoji: info.avatar, size: 32)
-            Text(info.handle).font(.subheadline)
+            Text(isMe ? "\(info.handle) (you)" : info.handle)
+                .font(.subheadline)
+                .fontWeight(isMe ? .semibold : .regular)
             Spacer()
             Text(entry.hasCued ? "cued ✓" : "no pick yet")
                 .font(.caption)

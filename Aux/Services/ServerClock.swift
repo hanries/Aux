@@ -32,6 +32,10 @@ struct ServerTime: Comparable {
 @Observable
 @MainActor
 final class ServerClock {
+    /// One clock per device — shared across the lobby and every room you join, so
+    /// switching rooms never re-calibrates.
+    static let shared = ServerClock()
+
     /// serverEpoch − deviceEpoch, in seconds.
     private(set) var offset: TimeInterval = 0
     private(set) var isCalibrated = false

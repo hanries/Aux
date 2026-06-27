@@ -63,6 +63,19 @@ final class PlaybackController {
         isPlaying = false
     }
 
+    /// App backgrounded: pause the ticker + audio but keep the loaded item, so
+    /// `resume()` just reseeks to the live position instead of re-buffering.
+    func suspend() {
+        ticker?.cancel()
+        ticker = nil
+        player.pause()
+        isPlaying = false
+    }
+
+    func resume() {
+        start()
+    }
+
     /// Decide what the player should be doing right now.
     private func reconcile() {
         guard let room, let clock else { return }

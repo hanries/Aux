@@ -65,8 +65,8 @@ struct NowPlayingView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if vm.isHost {
-                Text("HOST")
+            if vm.isLeader {
+                Text("LEADER")
                     .font(.caption2.bold())
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(.tint.opacity(0.25), in: Capsule())
@@ -80,6 +80,11 @@ struct NowPlayingView: View {
                 .tint(.accentColor)
             HStack {
                 Text(timeString(vm.playback.positionSeconds))
+                Spacer()
+                if let left = vm.votingSecondsLeft {
+                    Text("\(left)s left")
+                        .foregroundStyle(left <= 5 ? .orange : .secondary)
+                }
                 Spacer()
                 Text("0:30")
             }

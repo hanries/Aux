@@ -36,6 +36,7 @@ final class RoomChannel {
     private var channel: RealtimeChannelV2?
     private var tasks: [Task<Void, Never>] = []
     private let roomID: String
+    private var me: PresenceMember?
 
     init(roomID: String) {
         self.roomID = roomID
@@ -44,9 +45,10 @@ final class RoomChannel {
 
     var presentUserIDs: [String] { members.map(\.userId) }
 
-    /// The host = the earliest joiner currently present (tiebreak on id). The host
-    /// is responsible for driving `advance_room`.
-    var hostID: String? {
+    /// The longest-present member (earliest joiner, tiebreak on id). Deterministic
+    /// across clients — used as the leader for auto-DJ rounds and as the failover
+    /// leader when the on-deck DJ has left.
+    var longestPresentID: String? {
         members.min {
             ($0.joinedAtMs, $0.userId) < ($1.joinedAtMs, $1.userId)
         }?.userId
@@ -55,6 +57,7 @@ final class RoomChannel {
     func start(me: PresenceMember) async {
         guard channel == nil else { return }
 
+        self.me = me
         let channel = supabase.channel("room:\(roomID)") { config in
             config.presence.key = me.userId
         }
@@ -113,11 +116,22 @@ final class RoomChannel {
         emit.yield(.presenceChanged)
     }
 
+    /// Drop our presence (app backgrounded) without tearing down the channel.
+    func untrack() async {
+        if let channel { await channel.untrack() }
+    }
+
+    /// Re-announce our presence (app foregrounded).
+    func retrack() async {
+        if let channel, let me { try? await channel.track(me) }
+    }
+
     func stop() async {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
         if let channel { await channel.unsubscribe() }
         channel = nil
         members = []
+        me = nil
     }
 }

@@ -36,8 +36,13 @@ struct RootView: View {
             }
 
         case .ready(let profile):
-            // `id` ensures a fresh RoomViewModel per identity.
-            RoomView(profile: profile).id(profile.id)
+            NavigationStack {
+                LobbyView(profile: profile)
+                    .navigationDestination(for: Room.self) { room in
+                        RoomView(profile: profile, room: room)
+                    }
+            }
+            .id(profile.id)
 
         case .failed(let message):
             ErrorView(message: message) { session.retry() }

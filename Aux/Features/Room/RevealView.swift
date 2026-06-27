@@ -17,9 +17,21 @@ struct RevealView: View {
             tallyBar
             Divider().overlay(.white.opacity(0.1))
             whoVotedWhat
+            rotatingFooter
         }
         .padding(18)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    @ViewBuilder
+    private var rotatingFooter: some View {
+        Divider().overlay(.white.opacity(0.1))
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.mini)
+            Text("rotating to \(vm.upNextName ?? "Auto-DJ")…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var header: some View {

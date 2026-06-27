@@ -30,10 +30,10 @@ final class RoomViewModel {
     }
 
     let profile: UserProfile
+    let roomID: String
     let playback = PlaybackController()
-    let serverClock = ServerClock()
+    let serverClock = ServerClock.shared
 
-    private let roomID = RoomConfig.roomID
     private let channel: RoomChannel
     private let engine: RoomEngine
     private let auth = AuthService()
@@ -61,20 +61,56 @@ final class RoomViewModel {
     private var tickTask: Task<Void, Never>?
     private var currentRoundID: String?
 
-    init(profile: UserProfile) {
+    init(profile: UserProfile, roomID: String, initialRoom: Room? = nil) {
         self.profile = profile
-        self.channel = RoomChannel(roomID: RoomConfig.roomID)
-        self.engine = RoomEngine(roomID: RoomConfig.roomID)
+        self.roomID = roomID
+        self.room = initialRoom
+        self.channel = RoomChannel(roomID: roomID)
+        self.engine = RoomEngine(roomID: roomID)
     }
 
     // MARK: - Derived state
 
+    enum Role { case onDeck, inLine, audience }
+
     var audience: [PresenceMember] { channel.members }
-    var isHost: Bool { channel.hostID == profile.id }
     var amOnDeck: Bool { room?.currentDjId == profile.id }
     var amInLineup: Bool { lineup.contains { $0.userId == profile.id } }
     var myCuedTrack: Track? { lineup.first { $0.userId == profile.id }?.cuedTrack }
     var onDeckTrack: Track? { room?.currentTrack }
+
+    /// The leader drives `advance_room` + the heartbeat: the on-deck DJ if present,
+    /// else the longest-present member (covers auto-DJ + a DJ who just left).
+    var isLeader: Bool {
+        guard let room else { return false }
+        if let dj = room.currentDjId, channel.presentUserIDs.contains(dj) {
+            return dj == profile.id
+        }
+        return channel.longestPresentID == profile.id
+    }
+
+    var myRole: Role {
+        if amOnDeck { return .onDeck }
+        if amInLineup { return .inLine }
+        return .audience
+    }
+
+    /// 1-based spot in the waiting line ("you're #2"), if waiting.
+    var myLinePosition: Int? {
+        guard let idx = waitingLineup.firstIndex(where: { $0.userId == profile.id }) else { return nil }
+        return idx + 1
+    }
+
+    /// Who takes the decks next (the front of the waiting line), if anyone.
+    var upNextName: String? {
+        guard let next = waitingLineup.first else { return nil }
+        return displayMember(next.userId).handle
+    }
+
+    var votingSecondsLeft: Int? {
+        guard roundStage == .voting else { return nil }
+        return max(0, Int((RoomConfig.clipDuration - playback.positionSeconds).rounded(.up)))
+    }
 
     var onDeckName: String {
         guard let dj = room?.currentDjId else { return "Auto-DJ" }
@@ -167,7 +203,7 @@ final class RoomViewModel {
         await refreshMessages()
 
         engine.currentRoom = { [weak self] in self?.room }
-        engine.isHost = { [weak self] in self?.isHost ?? false }
+        engine.isLeader = { [weak self] in self?.isLeader ?? false }
         engine.presentIDs = { [weak self] in self?.channel.presentUserIDs ?? [] }
 
         eventTask = Task { [weak self] in
@@ -189,10 +225,27 @@ final class RoomViewModel {
         eventTask?.cancel()
         tickTask?.cancel()
         engine.stop()
-        serverClock.stop()
-        playback.stop()
+        playback.stop()           // shared ServerClock keeps running for other rooms
         await channel.stop()
         started = false
+    }
+
+    /// App backgrounded: drop presence + pause audio + pause advancement.
+    func enterBackground() async {
+        guard started else { return }
+        engine.stop()
+        playback.suspend()
+        await channel.untrack()
+    }
+
+    /// App foregrounded: re-announce presence, refetch the live round, resume.
+    func enterForeground() async {
+        guard started else { return }
+        await serverClock.calibrate()
+        await channel.retrack()
+        if let fresh = try? await roomService.fetchRoom(id: roomID) { apply(room: fresh) }
+        playback.resume()
+        engine.start(clock: serverClock)
     }
 
     // MARK: - Actions
