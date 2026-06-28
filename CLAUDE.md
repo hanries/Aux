@@ -21,8 +21,11 @@ the synced DJ-booth loop in a single seeded room.
   realtime counts/now-playing/lineup), clean join/leave/switch + background lifecycle,
   role/phase UI polish (on deck / in line "#2" / audience, voting countdown, reveal,
   "rotating to @next"), per-room independent loops, leader-driven advancement.
-- **M3 (not built): the connection layer** — taste twins → follow → 1:1 DM. *The moat.*
-- **M4 (not built): ship** — report/block, polish, TestFlight.
+- **M3 (done): the connection layer** — taste twins (vote-overlap RPC) surfaced in a room
+  sheet + a rate-limited reveal nudge; follow + "your people are live" (jump to their room);
+  realtime 1:1 DMs with an inbox + unread; lightweight profile cards; block (the safety
+  floor). App is now a Rooms / People / Messages TabView.
+- **M4 (not built): ship** — report + moderation, push, polish, TestFlight.
 
 Leave clean extension points for M2–M4; don't build them unless asked.
 
@@ -49,12 +52,13 @@ Aux/
               RoomChannel (one realtime channel: room/lineup/votes/messages + presence
               + host election); PlaybackController (AVPlayer sync); RoomEngine (advance
               loop); ServerClock (server-time offset); ITunesSearchService; RealtimeDecode
-  Features/   Onboarding/, Lobby/ (LobbyViewModel + LobbyView/RoomCardView), Room/
-              (RoomViewModel = the brain + NowPlaying/DJBooth/Audience/VotePanel/Reveal
-              subviews), Search/, Chat/
+  Features/   Onboarding/, Lobby/, Room/ (RoomViewModel = the brain + subviews), Search/,
+              Chat/, Connections/ (ConnectionsModel + TasteTwins/Profile/People/Inbox/DMThread)
+  App/        + MainTabView (Rooms/People/Messages)
   Shared/     RoomConfig (constants + genreEmoji), SharedViews (Avatar/Loading/Error/Night)
 supabase/schema.sql       # M1: full schema + RLS + RPCs + realtime + seed (run first)
 supabase/milestone2.sql   # M2: live-lobby columns + room_heartbeat + 5 more rooms (run 2nd)
+supabase/milestone3.sql   # M3: follows/blocks/dms + taste_twins/DM/presence RPCs (run 3rd)
 Secrets.example.swift  # repo-root template → copy to Aux/Config/Secrets.swift
 ```
 
@@ -104,6 +108,31 @@ read from it. Chat state lives on `RoomViewModel` (no separate ChatViewModel).
   `scenePhase` → `enterBackground()` (untrack presence + `playback.suspend()` + engine
   stop) / `enterForeground()` (recalibrate, retrack, refetch room, resume).
 
+## Connection layer (M3)
+
+- **Routing is now a TabView** (`MainTabView`): Rooms (lobby→room), People (following +
+  live), Messages (DM inbox), with badges for new followers + unread DMs. An app-scoped
+  `ConnectionsModel` (`@Observable`, injected via `.environment`) owns blocked-set,
+  following/followers, DM threads + unread, the new-follower badge, and the realtime subs
+  (`dms` + `follows`, RLS-scoped to me) + a 12s poll. **Sheets re-inject
+  `.environment(connections)`** since sheet env propagation isn't guaranteed.
+- **Taste twins** = the `taste_twins(p_room_id, min, recency)` RPC over `votes`
+  (`agreement = agree/shared`, excludes blocked pairs, returns `shared_hot_tracks`). Scoring
+  is never client-side. `votes.track` (jsonb, set on cast) gives the "you both loved" names.
+  `RoomViewModel` fetches on reveal (debounced) + on opening the sheet, and shows a
+  rate-limited reveal nudge (once per person).
+- **"Your people are live"** = denormalized `users.current_room_id` + `presence_heartbeat_ms`,
+  written by every client via `set_presence` on join/leave/background + a 10s heartbeat;
+  `my_following`/`live_followees` treat a stale heartbeat as offline. (Realtime presence is
+  still the per-room audience.)
+- **Follow / DM / block** all go through SECURITY DEFINER RPCs (`follow_user`,
+  `find_or_create_dm`, `send_dm`, `mark_dm_read`, `block_user`, …). `dms` use a sorted
+  (`user_lo<user_hi`) pair for find-or-create; unread = `last_ms > my read_ms`. **Block is
+  mutual + server-enforced** for taste-twins/DM/follow (the RPCs see all blocks); the
+  audience also hides blocked users client-side.
+- **RLS** on `follows`/`blocks`/`dms`/`dm_messages` so you only read your own relationships
+  and threads. New realtime tables: `dms`, `dm_messages`, `follows`.
+
 ## Conventions
 
 - `@Observable` + `@MainActor` view models; `Codable` structs; thin service layer.
@@ -129,7 +158,7 @@ read from it. Chat state lives on `RoomViewModel` (no separate ChatViewModel).
 ## Run / test
 
 See `README` section in the final setup message, or:
-1. `supabase/schema.sql` then `supabase/milestone2.sql` in the Supabase SQL editor.
+1. `supabase/schema.sql`, then `milestone2.sql`, then `milestone3.sql` in the SQL editor.
 2. Supabase → Auth → enable **anonymous sign-ins**.
 3. `cp Secrets.example.swift Aux/Config/Secrets.swift` and paste URL + anon key.
 4. Build/run on two simulators; verify: lobby lists 6 rooms (active-first, live counts),

@@ -14,6 +14,7 @@ struct RevealView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            if let nudge = vm.nudgeText { tasteTwinNudge(nudge) }
             tallyBar
             Divider().overlay(.white.opacity(0.1))
             whoVotedWhat
@@ -21,6 +22,17 @@ struct RevealView: View {
         }
         .padding(18)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func tasteTwinNudge(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Text("✨").font(.callout)
+            Text(text).font(.caption.weight(.medium))
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder

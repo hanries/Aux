@@ -18,7 +18,8 @@ struct VoteService {
         trackID: String,
         djID: String?,
         voterID: String,
-        vote: VoteKind
+        vote: VoteKind,
+        track: Track?
     ) async throws {
         let payload = VoteInsert(
             room_id: roomID,
@@ -26,7 +27,8 @@ struct VoteService {
             track_id: trackID,
             dj_id: djID,
             voter_id: voterID,
-            vote: vote.rawValue
+            vote: vote.rawValue,
+            track: track
         )
         try await supabase
             .from("votes")

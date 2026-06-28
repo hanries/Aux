@@ -41,6 +41,9 @@ final class RoomViewModel {
     private let lineupService = LineupService()
     private let voteService = VoteService()
     private let chatService = ChatService()
+    private let tasteTwinService = TasteTwinService()
+    private let presenceService = PresenceService()
+    private let blockService = BlockService()
 
     /// Durable identity (handle/avatar) resolved from the `users` table, so names
     /// render even for people who aren't in *our* presence snapshot right now.
@@ -54,12 +57,19 @@ final class RoomViewModel {
     private(set) var messages: [ChatMessage] = []
     private(set) var djHotVotes = 0
     private(set) var djTotalVotes = 0
+    private(set) var tasteTwins: [TasteTwin] = []
+    private(set) var nudgeText: String?
+    private(set) var blockedIDs: Set<String> = []
     var tick = 0   // bumped twice a second to refresh time-based UI
 
     private var started = false
     private var eventTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
+    private var presenceTask: Task<Void, Never>?
     private var currentRoundID: String?
+    private var lastStage: RoundStage = .idle
+    private var lastTwinFetch = Date.distantPast
+    private var nudgedTwinIDs: Set<String> = []
 
     init(profile: UserProfile, roomID: String, initialRoom: Room? = nil) {
         self.profile = profile
@@ -73,7 +83,7 @@ final class RoomViewModel {
 
     enum Role { case onDeck, inLine, audience }
 
-    var audience: [PresenceMember] { channel.members }
+    var audience: [PresenceMember] { channel.members.filter { !blockedIDs.contains($0.userId) } }
     var amOnDeck: Bool { room?.currentDjId == profile.id }
     var amInLineup: Bool { lineup.contains { $0.userId == profile.id } }
     var myCuedTrack: Track? { lineup.first { $0.userId == profile.id }?.cuedTrack }
@@ -218,24 +228,32 @@ final class RoomViewModel {
         await channel.start(me: me)
         engine.start(clock: serverClock)
 
+        blockedIDs = (try? await blockService.blockedIDs()) ?? []
+        try? await presenceService.set(roomID: roomID)
+        startPresenceHeartbeat()
+
         loadState = .ready
     }
 
     func stop() async {
         eventTask?.cancel()
         tickTask?.cancel()
+        presenceTask?.cancel()
         engine.stop()
         playback.stop()           // shared ServerClock keeps running for other rooms
         await channel.stop()
+        try? await presenceService.set(roomID: nil)
         started = false
     }
 
     /// App backgrounded: drop presence + pause audio + pause advancement.
     func enterBackground() async {
         guard started else { return }
+        presenceTask?.cancel()
         engine.stop()
         playback.suspend()
         await channel.untrack()
+        try? await presenceService.set(roomID: nil)
     }
 
     /// App foregrounded: re-announce presence, refetch the live round, resume.
@@ -246,7 +264,24 @@ final class RoomViewModel {
         if let fresh = try? await roomService.fetchRoom(id: roomID) { apply(room: fresh) }
         playback.resume()
         engine.start(clock: serverClock)
+        try? await presenceService.set(roomID: roomID)
+        startPresenceHeartbeat()
     }
+
+    /// Keep my per-user presence fresh so followers see me "live".
+    private func startPresenceHeartbeat() {
+        presenceTask?.cancel()
+        presenceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(RoomConfig.presenceHeartbeat))
+                guard let self else { return }
+                try? await self.presenceService.set(roomID: self.roomID)
+            }
+        }
+    }
+
+    /// Synced from the app-scoped ConnectionsModel so blocking hides them live.
+    func applyBlocked(_ ids: Set<String>) { blockedIDs = ids }
 
     // MARK: - Actions
 
@@ -269,9 +304,25 @@ final class RoomViewModel {
         guard let room, let round = room.roundId, let track = room.currentTrack else { return }
         try? await voteService.castVote(
             roomID: roomID, roundID: round, trackID: track.trackId,
-            djID: room.currentDjId, voterID: profile.id, vote: kind)
+            djID: room.currentDjId, voterID: profile.id, vote: kind, track: track)
         await refreshVotes()
         await refreshDJRating()
+    }
+
+    /// Refresh taste twins (debounced). Called on reveal + when the panel opens.
+    func refreshTasteTwins(force: Bool = false) async {
+        if !force, Date().timeIntervalSince(lastTwinFetch) < 2 { return }
+        lastTwinFetch = Date()
+        guard let twins = try? await tasteTwinService.fetch(roomID: roomID) else { return }
+        tasteTwins = twins
+        if nudgeText == nil,
+           let match = twins.first(where: {
+               $0.agreement >= 0.6 && $0.shared >= RoomConfig.tasteTwinMinShared
+                   && !nudgedTwinIDs.contains($0.otherId)
+           }) {
+            nudgedTwinIDs.insert(match.otherId)
+            nudgeText = "you and @\(match.handle) keep matching — \(match.matchText)"
+        }
     }
 
     func send(_ text: String) async {
@@ -352,7 +403,17 @@ final class RoomViewModel {
     private func startTicker() {
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
-                self?.tick &+= 1
+                guard let self else { return }
+                self.tick &+= 1
+                let stage = self.roundStage
+                if stage != self.lastStage {
+                    if stage == .reveal {
+                        await self.refreshTasteTwins()      // surface twins at the reveal
+                    } else {
+                        self.nudgeText = nil                // clear the nudge after reveal
+                    }
+                    self.lastStage = stage
+                }
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }

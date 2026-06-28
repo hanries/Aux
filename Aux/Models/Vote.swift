@@ -18,6 +18,7 @@ struct Vote: Codable, Identifiable {
     let djId: String?
     let voterId: String
     let vote: VoteKind
+    let track: Track?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -27,10 +28,12 @@ struct Vote: Codable, Identifiable {
         case djId = "dj_id"
         case voterId = "voter_id"
         case vote
+        case track
     }
 }
 
-/// Insert/upsert payload (server fills `id` + `created_at`).
+/// Insert/upsert payload (server fills `id` + `created_at`). `track` is
+/// denormalized so taste_twins can show "you both loved these" by name.
 struct VoteInsert: Encodable {
     let room_id: String
     let round_id: String
@@ -38,4 +41,5 @@ struct VoteInsert: Encodable {
     let dj_id: String?
     let voter_id: String
     let vote: String
+    let track: Track?
 }

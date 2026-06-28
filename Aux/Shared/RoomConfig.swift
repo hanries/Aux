@@ -29,6 +29,20 @@ enum RoomConfig {
     /// listening) — so empty rooms self-heal without anyone writing a final 0.
     static let lobbyStaleAfter: TimeInterval = 18
 
+    // MARK: Connection layer (M3)
+
+    /// Minimum shared votes before someone surfaces as a taste twin.
+    static let tasteTwinMinShared = 3
+
+    /// How far back taste-twin overlap looks (the "session"), in minutes.
+    static let tasteTwinRecencyMinutes = 240
+
+    /// A followed user is shown "live" if their presence heartbeat is newer.
+    static let presenceStaleMs = 30_000
+
+    /// How often a client refreshes its own per-user presence while in a room.
+    static let presenceHeartbeat: TimeInterval = 10
+
     /// A little visual identity per genre for the lobby cards.
     static func genreEmoji(_ genre: String) -> String {
         switch genre {

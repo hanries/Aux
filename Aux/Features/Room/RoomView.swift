@@ -16,7 +16,9 @@ struct RoomView: View {
     @State private var vm: RoomViewModel
     @State private var showSearch = false
     @State private var showChat = false
+    @State private var showTwins = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(ConnectionsModel.self) private var connections
 
     init(profile: UserProfile, room: Room) {
         self.profile = profile
@@ -40,7 +42,7 @@ struct RoomView: View {
         .navigationTitle(room.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
-        .task { await vm.start() }
+        .task { await vm.start(); vm.applyBlocked(connections.blockedIDs) }
         .onDisappear { Task { await vm.stop() } }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -49,11 +51,15 @@ struct RoomView: View {
             default: break
             }
         }
+        .onChange(of: connections.blockedIDs) { _, ids in vm.applyBlocked(ids) }
         .sheet(isPresented: $showSearch) {
             SearchView(vm: vm)
         }
         .sheet(isPresented: $showChat) {
             ChatView(vm: vm)
+        }
+        .sheet(isPresented: $showTwins) {
+            TasteTwinsView(vm: vm).environment(connections)
         }
     }
 
@@ -93,6 +99,14 @@ struct RoomView: View {
             Label("\(vm.audience.count)", systemImage: "person.2.fill")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showTwins = true
+                Task { await vm.refreshTasteTwins(force: true) }
+            } label: {
+                Image(systemName: "sparkles")
+            }
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button {

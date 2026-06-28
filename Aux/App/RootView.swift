@@ -36,13 +36,7 @@ struct RootView: View {
             }
 
         case .ready(let profile):
-            NavigationStack {
-                LobbyView(profile: profile)
-                    .navigationDestination(for: Room.self) { room in
-                        RoomView(profile: profile, room: room)
-                    }
-            }
-            .id(profile.id)
+            MainTabView(profile: profile).id(profile.id)
 
         case .failed(let message):
             ErrorView(message: message) { session.retry() }
