@@ -30,13 +30,21 @@ final class LobbyChannel {
         let channel = supabase.channel("lobby:rooms")
         self.channel = channel
 
-        let roomStream = channel.postgresChange(
+        let updateStream = channel.postgresChange(
             UpdateAction.self, schema: "public", table: "rooms")
+        let insertStream = channel.postgresChange(
+            InsertAction.self, schema: "public", table: "rooms")   // new instances
 
         await channel.subscribe()
 
         tasks.append(Task { [weak self] in
-            for await change in roomStream {
+            for await change in updateStream {
+                guard let room = RealtimeDecode.decode(Room.self, from: change.record) else { continue }
+                self?.emit.yield(room)
+            }
+        })
+        tasks.append(Task { [weak self] in
+            for await change in insertStream {
                 guard let room = RealtimeDecode.decode(Room.self, from: change.record) else { continue }
                 self?.emit.yield(room)
             }

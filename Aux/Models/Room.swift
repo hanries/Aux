@@ -26,6 +26,10 @@ struct Room: Codable, Identifiable, Hashable {
     let audienceHeartbeatMs: Double?
     let lineupCount: Int?
 
+    // Phase 3: category + instance (optional so pre-migration rows still decode).
+    let categoryId: String?
+    let instanceNo: Int?
+
     enum Phase: String, Codable {
         case idle, playing, picking
     }
@@ -40,6 +44,8 @@ struct Room: Codable, Identifiable, Hashable {
         case audienceCount = "audience_count"
         case audienceHeartbeatMs = "audience_heartbeat_ms"
         case lineupCount = "lineup_count"
+        case categoryId = "category_id"
+        case instanceNo = "instance_no"
     }
 
     /// Playback start as a wall-clock-agnostic server instant (seconds).

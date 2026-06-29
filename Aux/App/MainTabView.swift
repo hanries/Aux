@@ -24,13 +24,8 @@ struct MainTabView: View {
 
     var body: some View {
         TabView {
-            NavigationStack {
-                LobbyView(profile: profile)
-                    .navigationDestination(for: Room.self) { room in
-                        RoomView(profile: profile, room: room)
-                    }
-            }
-            .tabItem { Label("Rooms", systemImage: "music.note.house.fill") }
+            CategoriesView(profile: profile)
+                .tabItem { Label("Rooms", systemImage: "music.note.house.fill") }
 
             NavigationStack {
                 PeopleView(profile: profile)

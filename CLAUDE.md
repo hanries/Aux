@@ -40,10 +40,19 @@ strangers*: **love-reaction overlap = taste twins** → follow → DM.
   **possession** tenure (one DJ, no rotation), auto-DJ, chat. `reactions` table replaces
   `votes`; `advance_set` + `cue_set` replace `advance_room`/`cue_track`; `taste_twins` now
   = love-reaction overlap. SQL: `supabase/rebuild.sql`. (`votes`/`advance_room` left dormant.)
-- **Phase 2 (next): theme system + 2–3 category skins** — a theme-token layer on the one
-  engine (vary the *look*, never the interaction model).
-- **Phase 3: categories + room instancing + ~20 cap** (overflow → new instance).
-- **Phase 5: ship** (report/moderation, polish, TestFlight).
+- **Phase 2 (done): theme system.** `Theme` tokens + `ThemeCatalog` (warm/neon/retro)
+  keyed off genre, injected via `@Environment(\.roomTheme)`; `ThemedBackground` (gradient +
+  ambient motion) in the room; lobby/room views read tokens. Look varies, engine doesn't.
+- **Phase 3 (done): categories + room instancing + ~20 cap.** Home → categories → rooms.
+  `categories` table (one per genre); `rooms.category_id`/`instance_no`; `join_category()`
+  RPC routes to the fullest active instance under cap, reuses an idle one, else spins up
+  "<Category> N". SQL: `supabase/phase3.sql`. Rooms tab = `CategoriesView` → `CategoryView`
+  (flat `LobbyView` retired). **UI is intentionally minimal — final redesign pass deferred.**
+- **Phase 4 (effectively done via the rebuild): connection layer** — taste twins from
+  love-reaction overlap, follow, "your people are live", 1:1 DM, block (built in M3, rewired
+  to reactions). Lives in the People / Messages tabs + the room taste-twins sheet.
+- **Phase 5 (not built): ship** (report/moderation, polish, TestFlight) + the **UI redesign
+  pass** (all visual design saved for then).
 
 ## Stack & locked decisions (don't re-litigate)
 
@@ -176,7 +185,7 @@ read from it. Chat state lives on `RoomViewModel` (no separate ChatViewModel).
 ## Run / test
 
 See `README` section in the final setup message, or:
-1. `schema.sql`, `milestone2.sql`, `milestone3.sql`, then `rebuild.sql` in the SQL editor.
+1. `schema.sql`, `milestone2.sql`, `milestone3.sql`, `rebuild.sql`, `phase3.sql` in order.
 2. Supabase → Auth → enable **anonymous sign-ins**.
 3. `cp Secrets.example.swift Aux/Config/Secrets.swift` and paste URL + anon key.
 4. Build/run on two simulators; verify: lobby lists 6 rooms (active-first, live counts),

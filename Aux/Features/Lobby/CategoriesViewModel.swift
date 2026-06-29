@@ -1,11 +1,10 @@
 //
-//  LobbyViewModel.swift
+//  CategoriesViewModel.swift
 //  Aux
 //
-//  The home screen brain. One realtime subscription to `rooms` (via LobbyChannel)
-//  drives a live, active-first room list. Counts come from the denormalized
-//  columns the room leaders keep fresh; a 1s ticker re-evaluates heartbeat
-//  freshness so rooms that go quiet fade to idle on their own.
+//  Home brain: categories + their live room instances. One LobbyChannel
+//  subscription keeps every room fresh; we group by category for the browse list
+//  and route joins through `join_category`.
 //
 
 import Foundation
@@ -13,53 +12,52 @@ import Observation
 
 @MainActor
 @Observable
-final class LobbyViewModel {
+final class CategoriesViewModel {
 
-    enum LoadState: Equatable {
-        case loading, ready, failed(String)
-    }
+    enum LoadState: Equatable { case loading, ready, failed(String) }
 
     let profile: UserProfile
     let serverClock = ServerClock.shared
 
     private(set) var loadState: LoadState = .loading
+    private(set) var categories: [Category] = []
     private(set) var rooms: [Room] = []
     private(set) var profileCache: [String: UserProfile] = [:]
     var tick = 0
 
     private let channel = LobbyChannel()
     private let roomService = RoomService()
+    private let categoryService = CategoryService()
     private let auth = AuthService()
     private var roomsByID: [String: Room] = [:]
     private var eventTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private var started = false
 
-    init(profile: UserProfile) {
-        self.profile = profile
-    }
+    init(profile: UserProfile) { self.profile = profile }
 
     // MARK: - Derived
 
-    /// Active rooms first, then by listeners, lineup, name.
-    var sortedRooms: [Room] {
+    func rooms(in categoryID: String) -> [Room] {
         _ = tick
         let now = serverClock.now
-        return rooms.sorted { a, b in
+        return rooms.filter { $0.categoryId == categoryID }.sorted { a, b in
             let la = a.isLive(now: now), lb = b.isLive(now: now)
             if la != lb { return la }
             if a.listeners != b.listeners { return a.listeners > b.listeners }
-            if a.lineupSize != b.lineupSize { return a.lineupSize > b.lineupSize }
-            return a.name < b.name
+            return (a.instanceNo ?? 1) < (b.instanceNo ?? 1)
         }
     }
 
-    func isLive(_ room: Room) -> Bool {
-        _ = tick
-        return room.isLive(now: serverClock.now)
-    }
-
+    func isLive(_ room: Room) -> Bool { _ = tick; return room.isLive(now: serverClock.now) }
     func listeners(_ room: Room) -> Int { isLive(room) ? room.listeners : 0 }
+
+    func liveListeners(in categoryID: String) -> Int {
+        rooms(in: categoryID).reduce(0) { $0 + listeners($1) }
+    }
+    func liveRoomCount(in categoryID: String) -> Int {
+        rooms(in: categoryID).filter { isLive($0) }.count
+    }
 
     func djName(_ room: Room) -> String? {
         guard let dj = room.currentDjId else { return nil }
@@ -76,6 +74,7 @@ final class LobbyViewModel {
         await serverClock.calibrate()
 
         do {
+            categories = try await categoryService.fetchCategories()
             let all = try await roomService.fetchAllRooms()
             for room in all { roomsByID[room.id] = room }
             rooms = Array(roomsByID.values)
@@ -99,10 +98,14 @@ final class LobbyViewModel {
     }
 
     func stop() async {
-        eventTask?.cancel()
-        tickTask?.cancel()
+        eventTask?.cancel(); tickTask?.cancel()
         await channel.stop()
         started = false
+    }
+
+    /// Route into the best instance of a category; returns the room id to open.
+    func join(_ category: Category) async -> String? {
+        try? await categoryService.joinCategory(category.id)
     }
 
     private func ensureDJProfiles() async {
