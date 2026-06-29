@@ -66,11 +66,13 @@ struct RoomCardView: View {
     let room: Room
     let vm: LobbyViewModel
 
+    private var theme: Theme { ThemeCatalog.theme(for: room.genre) }
+
     var body: some View {
         let live = vm.isLive(room)
         HStack(spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.06))
+                RoundedRectangle(cornerRadius: 14).fill(theme.accent.opacity(0.18))
                 Text(RoomConfig.genreEmoji(room.genre)).font(.system(size: 30))
             }
             .frame(width: 60, height: 60)
@@ -99,7 +101,7 @@ struct RoomCardView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)
-                .strokeBorder(live ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1))
+                .strokeBorder(live ? theme.accent.opacity(0.45) : .clear, lineWidth: 1))
     }
 
     @ViewBuilder

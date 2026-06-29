@@ -2,10 +2,10 @@
 //  RoomViewModel.swift
 //  Aux
 //
-//  The room's brain. Owns the clock, realtime channel, rotation engine and
-//  playback; exposes derived state for the (dumb) views; and turns user taps into
-//  RPC calls. Everything time-based is recomputed off `tick` / playback position
-//  so SwiftUI refreshes smoothly.
+//  The room's brain (rebuild). People-first: the crowd is the hero, the audience
+//  reacts (live + attributed), and a single DJ holds the decks for a SET of clips
+//  by possession. No hot/skip, no vote/reveal phase. Owns the clock, realtime
+//  channel, rotation engine and playback; exposes derived state for thin views.
 //
 
 import Foundation
@@ -15,18 +15,16 @@ import Observation
 @Observable
 final class RoomViewModel {
 
-    enum LoadState: Equatable {
-        case loading
-        case ready
-        case failed(String)
-    }
+    enum LoadState: Equatable { case loading, ready, failed(String) }
 
-    /// What the room is doing *for the local user* this round.
-    enum RoundStage {
-        case idle       // bootstrapping / nothing yet
-        case voting     // clip playing, votes open
-        case reveal     // clip ended, showing who voted what
-        case picking    // on-deck DJ is choosing
+    /// What the room is doing right now (no voting/reveal phases anymore).
+    enum RoundStage { case idle, playing, picking }
+
+    struct Spark: Identifiable, Equatable {
+        let id = UUID()
+        let userID: String
+        let handle: String
+        let avatar: String
     }
 
     let profile: UserProfile
@@ -39,37 +37,37 @@ final class RoomViewModel {
     private let auth = AuthService()
     private let roomService = RoomService()
     private let lineupService = LineupService()
-    private let voteService = VoteService()
+    private let reactionService = ReactionService()
     private let chatService = ChatService()
     private let tasteTwinService = TasteTwinService()
     private let presenceService = PresenceService()
     private let blockService = BlockService()
 
-    /// Durable identity (handle/avatar) resolved from the `users` table, so names
-    /// render even for people who aren't in *our* presence snapshot right now.
+    /// Durable identity (handle/avatar) from the `users` table.
     private(set) var profileCache: [String: UserProfile] = [:]
 
     // Observable state
     var loadState: LoadState = .loading
     private(set) var room: Room?
     private(set) var lineup: [LineupEntry] = []
-    private(set) var votes: [Vote] = []
     private(set) var messages: [ChatMessage] = []
-    private(set) var djHotVotes = 0
-    private(set) var djTotalVotes = 0
+    private(set) var reactions: [Reaction] = []        // recent, for the live overlay
+    private(set) var myLoves: Set<String> = []         // track ids I've loved
     private(set) var tasteTwins: [TasteTwin] = []
-    private(set) var nudgeText: String?
     private(set) var blockedIDs: Set<String> = []
-    var tick = 0   // bumped twice a second to refresh time-based UI
+    private(set) var spark: Spark?                     // in-moment taste-twin spark
+    private(set) var waveToast: String?                // "@x waved at you"
+    var tick = 0
 
     private var started = false
     private var eventTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private var presenceTask: Task<Void, Never>?
+    private var sparkTask: Task<Void, Never>?
+    private var waveTask: Task<Void, Never>?
     private var currentRoundID: String?
-    private var lastStage: RoundStage = .idle
     private var lastTwinFetch = Date.distantPast
-    private var nudgedTwinIDs: Set<String> = []
+    private var sparkedUserIDs: Set<String> = []
 
     init(profile: UserProfile, roomID: String, initialRoom: Room? = nil) {
         self.profile = profile
@@ -86,11 +84,9 @@ final class RoomViewModel {
     var audience: [PresenceMember] { channel.members.filter { !blockedIDs.contains($0.userId) } }
     var amOnDeck: Bool { room?.currentDjId == profile.id }
     var amInLineup: Bool { lineup.contains { $0.userId == profile.id } }
-    var myCuedTrack: Track? { lineup.first { $0.userId == profile.id }?.cuedTrack }
+    var myCuedSet: [Track] { lineup.first { $0.userId == profile.id }?.set ?? [] }
     var onDeckTrack: Track? { room?.currentTrack }
 
-    /// The leader drives `advance_room` + the heartbeat: the on-deck DJ if present,
-    /// else the longest-present member (covers auto-DJ + a DJ who just left).
     var isLeader: Bool {
         guard let room else { return false }
         if let dj = room.currentDjId, channel.presentUserIDs.contains(dj) {
@@ -105,21 +101,14 @@ final class RoomViewModel {
         return .audience
     }
 
-    /// 1-based spot in the waiting line ("you're #2"), if waiting.
     var myLinePosition: Int? {
         guard let idx = waitingLineup.firstIndex(where: { $0.userId == profile.id }) else { return nil }
         return idx + 1
     }
 
-    /// Who takes the decks next (the front of the waiting line), if anyone.
     var upNextName: String? {
         guard let next = waitingLineup.first else { return nil }
         return displayMember(next.userId).handle
-    }
-
-    var votingSecondsLeft: Int? {
-        guard roundStage == .voting else { return nil }
-        return max(0, Int((RoomConfig.clipDuration - playback.positionSeconds).rounded(.up)))
     }
 
     var onDeckName: String {
@@ -131,18 +120,13 @@ final class RoomViewModel {
         return displayMember(dj).avatar
     }
 
-    /// Waiting DJs (everyone except whoever is on deck), in rotation order.
-    var waitingLineup: [LineupEntry] {
-        lineup.filter { $0.userId != room?.currentDjId }
-    }
+    var waitingLineup: [LineupEntry] { lineup.filter { $0.userId != room?.currentDjId } }
 
     var roundStage: RoundStage {
-        guard let room else { return .idle }
-        switch room.phase {
-        case .idle: return .idle
+        switch room?.phase {
         case .picking: return .picking
-        case .playing:
-            return playback.positionSeconds >= RoomConfig.clipDuration ? .reveal : .voting
+        case .playing: return .playing
+        default: return .idle
         }
     }
 
@@ -151,32 +135,20 @@ final class RoomViewModel {
         return min(1, max(0, playback.positionSeconds / RoomConfig.clipDuration))
     }
 
-    var hotCount: Int { votes.filter { $0.vote == .hot }.count }
-    var skipCount: Int { votes.filter { $0.vote == .skip }.count }
-    var myVote: VoteKind? { votes.first { $0.voterId == profile.id }?.vote }
-
-    var canVote: Bool {
-        room?.roundId != nil && room?.currentTrack != nil &&
-            (roundStage == .voting || roundStage == .reveal)
+    /// Did I love the track that's playing right now?
+    var iLoveCurrent: Bool {
+        guard let id = room?.currentTrack?.trackId else { return false }
+        return myLoves.contains(id)
     }
 
-    /// Each cast vote paired with the voter's display info — the reveal payload.
-    var revealRows: [(member: PresenceMember, vote: VoteKind)] {
-        votes.map { vote in
-            let info = displayMember(vote.voterId)
-            let member = PresenceMember(
-                userId: vote.voterId, handle: info.handle,
-                avatar: info.avatar, joinedAtMs: 0)
-            return (member, vote.vote)
-        }
-        .sorted { $0.member.handle.lowercased() < $1.member.handle.lowercased() }
+    /// The current DJ's warmth = love reactions on their picks (this session window).
+    var djWarmth: Int {
+        guard let dj = room?.currentDjId else { return 0 }
+        return reactions.filter { $0.djId == dj && $0.type == .love }.count
     }
 
-    var djHotRatingText: String? {
-        guard room?.currentDjId != nil, djTotalVotes > 0 else { return nil }
-        let pct = Int((Double(djHotVotes) / Double(djTotalVotes) * 100).rounded())
-        return "\(pct)% 🔥 over \(djTotalVotes) vote\(djTotalVotes == 1 ? "" : "s")"
-    }
+    /// Recent reactions to float in the live overlay (most recent last).
+    var recentReactions: [Reaction] { reactions.suffix(24) }
 
     var pickingSecondsLeft: Int? {
         _ = tick
@@ -187,7 +159,7 @@ final class RoomViewModel {
     func displayMember(_ userID: String) -> (handle: String, avatar: String) {
         if userID == profile.id { return (profile.handle, profile.avatar) }
         if let cached = profileCache[userID] { return (cached.handle, cached.avatar) }
-        if let m = audience.first(where: { $0.userId == userID }) { return (m.handle, m.avatar) }
+        if let m = channel.members.first(where: { $0.userId == userID }) { return (m.handle, m.avatar) }
         return ("someone", "🎧")
     }
 
@@ -211,6 +183,9 @@ final class RoomViewModel {
         }
         await refreshLineup()
         await refreshMessages()
+        if let recent = try? await reactionService.fetchRecent(roomID: roomID) {
+            reactions = recent.reversed()      // oldest → newest
+        }
 
         engine.currentRoom = { [weak self] in self?.room }
         engine.isLeader = { [weak self] in self?.isLeader ?? false }
@@ -236,17 +211,15 @@ final class RoomViewModel {
     }
 
     func stop() async {
-        eventTask?.cancel()
-        tickTask?.cancel()
-        presenceTask?.cancel()
+        eventTask?.cancel(); tickTask?.cancel(); presenceTask?.cancel()
+        sparkTask?.cancel(); waveTask?.cancel()
         engine.stop()
-        playback.stop()           // shared ServerClock keeps running for other rooms
+        playback.stop()
         await channel.stop()
         try? await presenceService.set(roomID: nil)
         started = false
     }
 
-    /// App backgrounded: drop presence + pause audio + pause advancement.
     func enterBackground() async {
         guard started else { return }
         presenceTask?.cancel()
@@ -256,7 +229,6 @@ final class RoomViewModel {
         try? await presenceService.set(roomID: nil)
     }
 
-    /// App foregrounded: re-announce presence, refetch the live round, resume.
     func enterForeground() async {
         guard started else { return }
         await serverClock.calibrate()
@@ -268,7 +240,6 @@ final class RoomViewModel {
         startPresenceHeartbeat()
     }
 
-    /// Keep my per-user presence fresh so followers see me "live".
     private func startPresenceHeartbeat() {
         presenceTask?.cancel()
         presenceTask = Task { [weak self] in
@@ -280,7 +251,6 @@ final class RoomViewModel {
         }
     }
 
-    /// Synced from the app-scoped ConnectionsModel so blocking hides them live.
     func applyBlocked(_ ids: Set<String>) { blockedIDs = ids }
 
     // MARK: - Actions
@@ -295,40 +265,39 @@ final class RoomViewModel {
         await refreshLineup()
     }
 
-    func cue(_ track: Track) async {
-        try? await lineupService.cue(roomID: roomID, track: track)
+    func cueSet(_ track: Track) async {
+        try? await lineupService.cueSet(roomID: roomID, track: track)
         await refreshLineup()
     }
 
-    func vote(_ kind: VoteKind) async {
-        guard let room, let round = room.roundId, let track = room.currentTrack else { return }
-        try? await voteService.castVote(
-            roomID: roomID, roundID: round, trackID: track.trackId,
-            djID: room.currentDjId, voterID: profile.id, vote: kind, track: track)
-        await refreshVotes()
-        await refreshDJRating()
+    /// Send a reaction. `love` toggles my taste signal + may fire a spark.
+    func react(_ type: ReactionType, target: String? = nil) async {
+        guard let room else { return }
+        let track = room.currentTrack
+        if type == .love, let tid = track?.trackId {
+            myLoves.insert(tid)
+            checkSparkForMyLove(trackID: tid)
+        }
+        try? await reactionService.react(
+            roomID: roomID, roundID: room.roundId, trackID: track?.trackId,
+            djID: room.currentDjId, userID: profile.id, type: type,
+            targetUserID: target, track: type == .love ? track : nil)
     }
 
-    /// Refresh taste twins (debounced). Called on reveal + when the panel opens.
-    func refreshTasteTwins(force: Bool = false) async {
-        if !force, Date().timeIntervalSince(lastTwinFetch) < 2 { return }
-        lastTwinFetch = Date()
-        guard let twins = try? await tasteTwinService.fetch(roomID: roomID) else { return }
-        tasteTwins = twins
-        if nudgeText == nil,
-           let match = twins.first(where: {
-               $0.agreement >= 0.6 && $0.shared >= RoomConfig.tasteTwinMinShared
-                   && !nudgedTwinIDs.contains($0.otherId)
-           }) {
-            nudgedTwinIDs.insert(match.otherId)
-            nudgeText = "you and @\(match.handle) keep matching — \(match.matchText)"
-        }
+    func wave(at userID: String) async {
+        await react(.wave, target: userID)
     }
 
     func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         try? await chatService.send(roomID: roomID, userID: profile.id, text: trimmed)
+    }
+
+    func refreshTasteTwins(force: Bool = false) async {
+        if !force, Date().timeIntervalSince(lastTwinFetch) < 5 { return }
+        lastTwinFetch = Date()
+        if let twins = try? await tasteTwinService.fetch(roomID: roomID) { tasteTwins = twins }
     }
 
     // MARK: - Realtime handling
@@ -339,13 +308,12 @@ final class RoomViewModel {
             apply(room: room)
         case .lineupChanged:
             Task { await refreshLineup() }
-        case .votesChanged:
-            Task { await refreshVotes(); await refreshDJRating() }
+        case .reaction(let reaction):
+            ingest(reaction)
         case .messageInserted(let message):
             if !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
             Task { await ensureProfiles([message.userId]) }
         case .presenceChanged:
-            // Present members carry their own identity — seed the cache from them.
             for member in channel.members where profileCache[member.userId] == nil {
                 profileCache[member.userId] = UserProfile(
                     id: member.userId, handle: member.handle, avatar: member.avatar)
@@ -353,17 +321,61 @@ final class RoomViewModel {
         }
     }
 
+    private func ingest(_ reaction: Reaction) {
+        if !reactions.contains(where: { $0.id == reaction.id }) {
+            reactions.append(reaction)
+            if reactions.count > 60 { reactions.removeFirst(reactions.count - 60) }
+        }
+        Task { await ensureProfiles([reaction.userId]) }
+
+        // Directed wave at me → toast.
+        if reaction.type == .wave, reaction.targetUserId == profile.id, reaction.userId != profile.id {
+            showWave(from: reaction.userId)
+        }
+        // Someone loved a track I also loved → spark.
+        if reaction.type == .love, reaction.userId != profile.id,
+           let tid = reaction.trackId, myLoves.contains(tid) {
+            fireSpark(with: reaction.userId)
+        }
+    }
+
+    /// When I love a track, see if a present stranger already loved it → spark.
+    private func checkSparkForMyLove(trackID: String) {
+        if let other = reactions.first(where: {
+            $0.type == .love && $0.userId != profile.id && $0.trackId == trackID
+        }) {
+            fireSpark(with: other.userId)
+        }
+    }
+
+    private func fireSpark(with userID: String) {
+        guard !sparkedUserIDs.contains(userID), !blockedIDs.contains(userID) else { return }
+        sparkedUserIDs.insert(userID)
+        let info = displayMember(userID)
+        spark = Spark(userID: userID, handle: info.handle, avatar: info.avatar)
+        sparkTask?.cancel()
+        sparkTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            self?.spark = nil
+        }
+    }
+
+    func dismissSpark() { spark = nil; sparkTask?.cancel() }
+
+    private func showWave(from userID: String) {
+        waveToast = "\(displayMember(userID).handle) waved at you 👋"
+        waveTask?.cancel()
+        waveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            self?.waveToast = nil
+        }
+    }
+
     private func apply(room: Room) {
         self.room = room
         playback.update(room: room)
         if let dj = room.currentDjId { Task { await ensureProfiles([dj]) } }
-        if room.roundId != currentRoundID {
-            currentRoundID = room.roundId
-            votes = []
-            djHotVotes = 0
-            djTotalVotes = 0
-            Task { await refreshVotes(); await refreshDJRating() }
-        }
+        currentRoundID = room.roundId
     }
 
     private func refreshLineup() async {
@@ -371,18 +383,11 @@ final class RoomViewModel {
         await ensureProfiles(lineup.map(\.userId))
     }
 
-    private func refreshVotes() async {
-        guard let round = room?.roundId else { votes = []; return }
-        if let updated = try? await voteService.fetchVotes(roundID: round) { votes = updated }
-        await ensureProfiles(votes.map(\.voterId))
-    }
-
     private func refreshMessages() async {
         if let recent = try? await chatService.fetchRecent(roomID: roomID) { messages = recent }
         await ensureProfiles(messages.map(\.userId))
     }
 
-    /// Fetch any not-yet-cached identities from the `users` table.
     private func ensureProfiles(_ ids: [String]) async {
         let missing = Set(ids).subtracting(profileCache.keys).subtracting([profile.id])
             .filter { !$0.isEmpty }
@@ -392,28 +397,14 @@ final class RoomViewModel {
         }
     }
 
-    private func refreshDJRating() async {
-        guard let dj = room?.currentDjId else { djHotVotes = 0; djTotalVotes = 0; return }
-        if let all = try? await voteService.fetchVotesByDJ(roomID: roomID, djID: dj) {
-            djTotalVotes = all.count
-            djHotVotes = all.filter { $0.vote == .hot }.count
-        }
-    }
-
     private func startTicker() {
         tickTask = Task { [weak self] in
+            var n = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 self.tick &+= 1
-                let stage = self.roundStage
-                if stage != self.lastStage {
-                    if stage == .reveal {
-                        await self.refreshTasteTwins()      // surface twins at the reveal
-                    } else {
-                        self.nudgeText = nil                // clear the nudge after reveal
-                    }
-                    self.lastStage = stage
-                }
+                n += 1
+                if n % 20 == 0 { await self.refreshTasteTwins() }   // ~every 10s
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }

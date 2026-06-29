@@ -4,13 +4,18 @@ Context for future Claude Code sessions. Read `aux-mvp.md` for the full product 
 
 ## What this is
 
-**Aux** is a real-time, room-based social music game. Players drop into a genre room
-and take turns at a **Turntable-style rotating DJ booth**: one on-deck DJ plays a 30s
-clip for the room, everyone votes **hot/skip**, the reveal shows **who voted what**, and
-the baton rotates to the next DJ. The real product is *connection between strangers* —
-the people whose taste matches yours become friends. That connection layer (taste twins
-→ follow → DM) is a **later milestone**; this repo currently implements **Milestone 1**:
-the synced DJ-booth loop in a single seeded room.
+**Aux** is a real-time, **people-first** social music game. You drop into a small genre
+room, see the **crowd** of faces (the hero), and **react** to the same music together —
+a live, *attributed* emote palette (fire/hands/laugh/wave/love). A single DJ holds the
+decks for a **set** of 30s clips by **possession** (keeps them by default; passes only on
+leave / idle / sustained-cold). **No hot/skip vote, no reveal phase, no per-track
+rotation** — those were the pre-rebuild model. The real product is *connection between
+strangers*: **love-reaction overlap = taste twins** → follow → DM.
+
+> The room model was **rebuilt** (see `aux-mvp.md` "Build sequence (revised)"). M1–M3
+> below describe the *original* Turntable voting build; the rebuild replaced the room
+> engine + screen with the people-first/reactions/possession model. Plumbing (Supabase
+> services, realtime, presence, clip-sync, the follow/DM/block layer) was reused.
 
 ## Milestone status
 
@@ -27,7 +32,18 @@ the synced DJ-booth loop in a single seeded room.
   floor). App is now a Rooms / People / Messages TabView.
 - **M4 (not built): ship** — report + moderation, push, polish, TestFlight.
 
-Leave clean extension points for M2–M4; don't build them unless asked.
+### Rebuild (current model — supersedes the M1–M3 room game)
+
+- **Phase 1 (done): people-first room engine.** Crowd-as-hero (`CrowdView`), the DJ on
+  stage (`DJStageView`), the live attributed reaction palette (`ReactionBarView` +
+  `ReactionViews`) with the directed **wave** + in-moment **taste sparks**, **set**-based
+  **possession** tenure (one DJ, no rotation), auto-DJ, chat. `reactions` table replaces
+  `votes`; `advance_set` + `cue_set` replace `advance_room`/`cue_track`; `taste_twins` now
+  = love-reaction overlap. SQL: `supabase/rebuild.sql`. (`votes`/`advance_room` left dormant.)
+- **Phase 2 (next): theme system + 2–3 category skins** — a theme-token layer on the one
+  engine (vary the *look*, never the interaction model).
+- **Phase 3: categories + room instancing + ~20 cap** (overflow → new instance).
+- **Phase 5: ship** (report/moderation, polish, TestFlight).
 
 ## Stack & locked decisions (don't re-litigate)
 
@@ -37,9 +53,11 @@ Leave clean extension points for M2–M4; don't build them unless asked.
 - **Backend/realtime:** Supabase (Postgres + Realtime + Auth) via `supabase-swift`
   (SPM, pinned `>= 2.0.0`, resolves to 2.48.x).
 - **Auth:** Supabase **anonymous sign-in** + a `users` row (handle + emoji avatar).
-- **Play model:** rotating DJ booth (single on-deck DJ), **not** a shared queue.
-- **Queue advance:** host-elected client → idempotent `advance_room()` RPC (CAS on
-  `round_id`). Fully serverless — SQL only, no Edge Functions / cron.
+- **Play model (rebuild):** one DJ holds the decks for a **set** by **possession**
+  (no rotation, no vote); audience action is **reactions**, not hot/skip.
+- **Advance:** leader client (on-deck DJ, else longest-present) → idempotent `advance_set()`
+  RPC (CAS on `round_id`): pops the DJ's `cued_set` head; passes the decks only on
+  leave / idle-grace / sustained-cold (reaction floor). Fully serverless — SQL only.
 
 ## Project layout
 
@@ -158,7 +176,7 @@ read from it. Chat state lives on `RoomViewModel` (no separate ChatViewModel).
 ## Run / test
 
 See `README` section in the final setup message, or:
-1. `supabase/schema.sql`, then `milestone2.sql`, then `milestone3.sql` in the SQL editor.
+1. `schema.sql`, `milestone2.sql`, `milestone3.sql`, then `rebuild.sql` in the SQL editor.
 2. Supabase → Auth → enable **anonymous sign-ins**.
 3. `cp Secrets.example.swift Aux/Config/Secrets.swift` and paste URL + anon key.
 4. Build/run on two simulators; verify: lobby lists 6 rooms (active-first, live counts),

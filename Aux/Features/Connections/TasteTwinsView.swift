@@ -66,7 +66,7 @@ struct TasteTwinCard: View {
                     AvatarView(emoji: twin.avatar, size: 46, ring: .accentColor)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(twin.handle).font(.headline)
-                        Text("\(twin.agreementPercent)% match · \(twin.matchText)")
+                        Text("\(twin.shared) shared love\(twin.shared == 1 ? "" : "s")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()

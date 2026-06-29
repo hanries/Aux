@@ -2,9 +2,8 @@
 //  RoomView.swift
 //  Aux
 //
-//  The stage. Thin shell that composes the now-playing card, the round stage
-//  (vote / reveal / picking), the DJ booth and the audience, with chat + search
-//  as sheets.
+//  The people-first room: the crowd is the hero, the DJ is on stage, and the
+//  reaction bar is the primary action. Chat / search / taste-twins are sheets.
 //
 
 import SwiftUI
@@ -17,8 +16,11 @@ struct RoomView: View {
     @State private var showSearch = false
     @State private var showChat = false
     @State private var showTwins = false
+    @State private var profileTarget: UserRef?
+    @State private var dmTarget: DMTarget?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(ConnectionsModel.self) private var connections
+    private let dmService = DMService()
 
     init(profile: UserProfile, room: Room) {
         self.profile = profile
@@ -27,9 +29,11 @@ struct RoomView: View {
             profile: profile, roomID: room.id, initialRoom: room))
     }
 
+    private var theme: Theme { ThemeCatalog.theme(for: room.genre) }
+
     var body: some View {
         ZStack {
-            NightBackground()
+            ThemedBackground(theme: theme)
             switch vm.loadState {
             case .loading:
                 LoadingView(label: "Joining \(room.name)…")
@@ -42,6 +46,15 @@ struct RoomView: View {
         .navigationTitle(room.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
+        .environment(\.roomTheme, theme)
+        .tint(theme.accent)
+        .safeAreaInset(edge: .bottom) {
+            if case .ready = vm.loadState { ReactionBarView(vm: vm) }
+        }
+        .overlay(alignment: .top) { banners }
+        .overlay(alignment: .bottomTrailing) {
+            ReactionOverlay(vm: vm).padding(.trailing, 12).padding(.bottom, 80)
+        }
         .task { await vm.start(); vm.applyBlocked(connections.blockedIDs) }
         .onDisappear { Task { await vm.stop() } }
         .onChange(of: scenePhase) { _, phase in
@@ -52,73 +65,83 @@ struct RoomView: View {
             }
         }
         .onChange(of: connections.blockedIDs) { _, ids in vm.applyBlocked(ids) }
-        .sheet(isPresented: $showSearch) {
-            SearchView(vm: vm)
+        .sheet(isPresented: $showSearch) { SearchView(vm: vm) }
+        .sheet(isPresented: $showChat) { ChatView(vm: vm) }
+        .sheet(isPresented: $showTwins) { TasteTwinsView(vm: vm).environment(connections) }
+        .sheet(item: $profileTarget) { ref in
+            ProfileSheet(userID: ref.id).environment(connections)
         }
-        .sheet(isPresented: $showChat) {
-            ChatView(vm: vm)
-        }
-        .sheet(isPresented: $showTwins) {
-            TasteTwinsView(vm: vm).environment(connections)
+        .sheet(item: $dmTarget) { target in
+            NavigationStack {
+                DMThreadView(profile: profile, dmID: target.dmID, otherID: target.otherID,
+                             otherHandle: target.otherHandle, otherAvatar: target.otherAvatar)
+            }
+            .preferredColorScheme(.dark)
         }
     }
 
     private var stage: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                NowPlayingView(vm: vm)
-                roundStage
+            VStack(spacing: 18) {
+                DJStageView(vm: vm)
+                if vm.roundStage == .picking {
+                    PickingBanner(vm: vm) { showSearch = true }
+                }
+                CrowdView(vm: vm,
+                          onWave: { id in Task { await vm.wave(at: id) } },
+                          onProfile: { id in profileTarget = UserRef(id: id) })
                 DJBoothView(vm: vm) { showSearch = true }
-                AudienceView(vm: vm)
             }
             .padding(16)
         }
     }
 
     @ViewBuilder
-    private var roundStage: some View {
-        switch vm.roundStage {
-        case .voting:
-            VotePanelView(vm: vm)
-        case .reveal:
-            RevealView(vm: vm)
-        case .picking:
-            PickingBanner(vm: vm) { showSearch = true }
-        case .idle:
-            Text("Warming up the room…")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+    private var banners: some View {
+        VStack(spacing: 8) {
+            if let toast = vm.waveToast {
+                Text(toast)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            if let spark = vm.spark {
+                TasteSparkView(
+                    spark: spark,
+                    onWave: { Task { await vm.wave(at: spark.userID); vm.dismissSpark() } },
+                    onMessage: { Task { await openDM(with: spark) } },
+                    onDismiss: { vm.dismissSpark() })
+            }
         }
+        .padding(.top, 4)
+        .animation(.spring(duration: 0.3), value: vm.spark)
+        .animation(.easeInOut, value: vm.waveToast)
+    }
+
+    private func openDM(with spark: RoomViewModel.Spark) async {
+        guard let dmID = try? await dmService.openThread(with: spark.userID) else { return }
+        vm.dismissSpark()
+        dmTarget = DMTarget(dmID: dmID, otherID: spark.userID,
+                            otherHandle: spark.handle, otherAvatar: spark.avatar)
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Label("\(vm.audience.count)", systemImage: "person.2.fill")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 showTwins = true
                 Task { await vm.refreshTasteTwins(force: true) }
-            } label: {
-                Image(systemName: "sparkles")
-            }
+            } label: { Image(systemName: "sparkles") }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                showChat = true
-            } label: {
+            Button { showChat = true } label: {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
             }
         }
     }
 }
 
-/// Shown while the on-deck DJ is choosing a track.
+/// Shown while the on-deck DJ is lining up their next clip.
 struct PickingBanner: View {
     let vm: RoomViewModel
     let onPick: () -> Void
@@ -126,16 +149,12 @@ struct PickingBanner: View {
     var body: some View {
         VStack(spacing: 12) {
             if vm.amOnDeck {
-                Text("You're up! 🎧")
-                    .font(.headline)
-                Text("Cue a track before the timer runs out.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Button("Pick a track", action: onPick)
-                    .buttonStyle(.borderedProminent)
+                Text("You're on the decks 🎧").font(.headline)
+                Text("Add a track to your set before the timer runs out.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Add a track", action: onPick).buttonStyle(.borderedProminent)
             } else {
-                Text("\(vm.onDeckName) is picking…")
-                    .font(.headline)
+                Text("\(vm.onDeckName) is lining one up…").font(.headline)
             }
             if let left = vm.pickingSecondsLeft {
                 Text("\(left)s")

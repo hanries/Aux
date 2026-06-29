@@ -83,7 +83,7 @@ struct SearchView: View {
             List(model.results) { track in
                 Button {
                     Task {
-                        await vm.cue(track)
+                        await vm.cueSet(track)
                         dismiss()
                     }
                 } label: {

@@ -30,9 +30,10 @@ struct LineupService {
         try await supabase.rpc("step_down", params: RoomIDParam(p_room_id: roomID)).execute()
     }
 
-    func cue(roomID: String, track: Track) async throws {
+    /// Append a clip to my set (and start immediately if I'm on deck mid-grace).
+    func cueSet(roomID: String, track: Track) async throws {
         try await supabase
-            .rpc("cue_track", params: CueTrackParams(p_room_id: roomID, p_track: track))
+            .rpc("cue_set", params: CueTrackParams(p_room_id: roomID, p_track: track))
             .execute()
     }
 }

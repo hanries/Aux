@@ -17,28 +17,29 @@ struct ProfileService {
         let profile = (try? await auth.fetchProfile(id: userID))
             ?? UserProfile(id: userID, handle: "someone", avatar: "🎧")
 
-        async let djVotesReq: [Vote] = supabase
-            .from("votes").select().eq("dj_id", value: userID).execute().value
-        async let hotVotesReq: [Vote] = supabase
-            .from("votes").select()
-            .eq("voter_id", value: userID).eq("vote", value: "hot")
-            .order("created_at", ascending: false).limit(20).execute().value
+        // Reactions earned as a DJ (love = warmth) and tracks this user loved.
+        async let djReactionsReq: [Reaction] = supabase
+            .from("reactions").select().eq("dj_id", value: userID).execute().value
+        async let lovedReq: [Reaction] = supabase
+            .from("reactions").select()
+            .eq("user_id", value: userID).eq("type", value: "love")
+            .order("created_at", ascending: false).limit(30).execute().value
 
-        let djVotes = (try? await djVotesReq) ?? []
-        let hotVotes = (try? await hotVotesReq) ?? []
+        let djReactions = (try? await djReactionsReq) ?? []
+        let loved = (try? await lovedReq) ?? []
 
         var seen = Set<String>()
         var picks: [Track] = []
-        for vote in hotVotes {
-            guard let track = vote.track, !seen.contains(track.trackId) else { continue }
+        for reaction in loved {
+            guard let track = reaction.track, !seen.contains(track.trackId) else { continue }
             seen.insert(track.trackId)
             picks.append(track)
         }
 
         return ProfileCard(
             profile: profile,
-            djHotVotes: djVotes.filter { $0.vote == .hot }.count,
-            djTotalVotes: djVotes.count,
+            djHotVotes: djReactions.filter { $0.type == .love }.count,
+            djTotalVotes: djReactions.count,
             recentHotPicks: Array(picks.prefix(6)))
     }
 }

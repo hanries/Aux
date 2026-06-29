@@ -19,7 +19,7 @@ import Realtime
 enum RoomEvent {
     case roomUpdated(Room)
     case lineupChanged
-    case votesChanged
+    case reaction(Reaction)
     case messageInserted(ChatMessage)
     case presenceChanged
 }
@@ -70,8 +70,8 @@ final class RoomChannel {
             UpdateAction.self, schema: "public", table: "rooms", filter: roomFilter)
         let lineupStream = channel.postgresChange(
             AnyAction.self, schema: "public", table: "dj_lineup", filter: scopeFilter)
-        let voteStream = channel.postgresChange(
-            AnyAction.self, schema: "public", table: "votes", filter: scopeFilter)
+        let reactionStream = channel.postgresChange(
+            InsertAction.self, schema: "public", table: "reactions", filter: scopeFilter)
         let messageStream = channel.postgresChange(
             InsertAction.self, schema: "public", table: "messages", filter: scopeFilter)
         let presenceStream = channel.presenceChange()
@@ -89,7 +89,10 @@ final class RoomChannel {
             for await _ in lineupStream { self?.emit.yield(.lineupChanged) }
         })
         tasks.append(Task { [weak self] in
-            for await _ in voteStream { self?.emit.yield(.votesChanged) }
+            for await change in reactionStream {
+                guard let reaction = RealtimeDecode.decode(Reaction.self, from: change.record) else { continue }
+                self?.emit.yield(.reaction(reaction))
+            }
         })
         tasks.append(Task { [weak self] in
             for await change in messageStream {

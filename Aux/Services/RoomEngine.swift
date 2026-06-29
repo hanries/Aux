@@ -69,7 +69,7 @@ final class RoomEngine {
         inFlight = true
         defer { inFlight = false }
         do {
-            try await supabase.rpc("advance_room", params: AdvanceParams(
+            try await supabase.rpc("advance_set", params: AdvanceParams(
                 p_room_id: roomID,
                 p_expected_round_id: room.roundId,
                 p_present: presentIDs()

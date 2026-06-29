@@ -77,7 +77,6 @@ struct ProfileCard {
 
     var djRatingText: String? {
         guard djTotalVotes > 0 else { return nil }
-        let pct = Int((Double(djHotVotes) / Double(djTotalVotes) * 100).rounded())
-        return "\(pct)% 🔥 as a DJ · \(djTotalVotes) vote\(djTotalVotes == 1 ? "" : "s")"
+        return "\(djHotVotes) 💜 as a DJ · \(djTotalVotes) reaction\(djTotalVotes == 1 ? "" : "s")"
     }
 }
