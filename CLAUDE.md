@@ -43,7 +43,7 @@ strangers*: **love-reaction overlap = taste twins** → follow → DM.
 - **Phase 2 (done): theme system.** `Theme` tokens + `ThemeCatalog` (warm/neon/retro)
   keyed off genre, injected via `@Environment(\.roomTheme)`; `ThemedBackground` (gradient +
   ambient motion) in the room; lobby/room views read tokens. Look varies, engine doesn't.
-- **Phase 3 (done): categories + room instancing + ~20 cap.** Home → categories → rooms.
+- **Phase 3 (done): categories + room instancing + a 7-person cap.** Home → categories → rooms.
   `categories` table (one per genre); `rooms.category_id`/`instance_no`; `join_category()`
   RPC routes to the fullest active instance under cap, reuses an idle one, else spins up
   "<Category> N". SQL: `supabase/phase3.sql`. Rooms tab = `CategoriesView` → `CategoryView`

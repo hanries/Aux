@@ -37,8 +37,9 @@ enum RoomConfig {
     /// How far back taste-twin overlap looks (the "session"), in minutes.
     static let tasteTwinRecencyMinutes = 240
 
-    /// Per-room audience cap (~20) — rooms stay intimate; overflow → new instance.
-    static let roomCap = 20
+    /// Per-room audience cap — small + intimate (built for genuine connection);
+    /// overflow routes to a new instance. Keep in sync with join_category's v_cap.
+    static let roomCap = 7
 
     /// A followed user is shown "live" if their presence heartbeat is newer.
     static let presenceStaleMs = 30_000

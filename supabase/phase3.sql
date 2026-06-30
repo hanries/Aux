@@ -4,7 +4,8 @@
 -- Additive + idempotent.
 --
 -- Home → categories → rooms. Each genre becomes a CATEGORY holding 1+ room
--- INSTANCES (~20 cap). Popularity creates more rooms (Lo-Fi 2), never bigger ones.
+-- INSTANCES (cap 7 — small + intimate, built for genuine connection). Popularity
+-- creates more rooms (Lo-Fi 2), never bigger ones.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -52,7 +53,7 @@ returns uuid
 language plpgsql security definer set search_path = public
 as $$
 declare
-  v_cap     constant int    := 20;     -- ~20 cap per room
+  v_cap     constant int    := 7;      -- 7 per room: intimate, built for connection
   v_stale   constant bigint := 18000;  -- heartbeat freshness (~lobbyStaleAfter)
   v_now_ms  bigint := (extract(epoch from clock_timestamp()) * 1000)::bigint;
   v_cat     categories%rowtype;
